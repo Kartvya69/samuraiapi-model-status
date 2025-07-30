@@ -11,6 +11,16 @@ interface ModelStatuses {
   [key: string]: ModelStatus;
 }
 
+interface CachedApiResponse {
+  data: ModelStatuses;
+  stats: {
+    total: number;
+    online: number;
+    offline: number;
+    uptime: string;
+  };
+}
+
 export default function Home() {
   const [models, setModels] = useState<ModelStatuses>({});
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
@@ -51,8 +61,9 @@ export default function Home() {
   const fetchModels = async () => {
     try {
       const response = await fetch('/api/models');
-      const data = await response.json();
-      setModels(data);
+      const cachedData: CachedApiResponse = await response.json();
+      
+      setModels(cachedData.data);
       setLastUpdate(new Date().toLocaleTimeString());
     } catch (error) {
       console.error('Failed to fetch models:', error);

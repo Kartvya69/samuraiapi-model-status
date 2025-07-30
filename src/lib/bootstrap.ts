@@ -27,6 +27,14 @@ export async function initializeApp() {
 
 // Auto-initialize when this module is imported (server-side)
 if (typeof window === 'undefined') {
-  // Only run on server side
-  initializeApp().catch(console.error);
+  // For serverless environments, don't auto-initialize
+  // The initialization will happen on first API call instead
+  const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY;
+  
+  if (!isServerless) {
+    // Only run on traditional server environments
+    setTimeout(() => {
+      initializeApp().catch(console.error);
+    }, 1000);
+  }
 }

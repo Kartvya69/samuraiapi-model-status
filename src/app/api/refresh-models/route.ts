@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
-import { fetchAvailableModels, getAvailableModels, checkAllModels } from '@/lib/modelService';
-import '@/lib/bootstrap'; // This ensures monitoring starts when the server boots
+import { fetchAvailableModels, getAvailableModels, checkAllModels, ensureMonitoringStarted } from '@/lib/modelService';
 
 export async function POST() {
   try {
+    // Ensure monitoring is started
+    await ensureMonitoringStarted();
+    
     await fetchAvailableModels();
     await checkAllModels();
     const models = getAvailableModels();
