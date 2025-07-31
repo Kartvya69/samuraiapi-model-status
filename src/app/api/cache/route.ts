@@ -1,20 +1,18 @@
 import { NextResponse } from 'next/server';
-import { getCachedResponse, ensureMonitoringStarted } from '@/lib/modelService';
+import { getAvailableModelsList } from '@/lib/modelService';
 
 export async function GET() {
   try {
-    // Ensure monitoring is started before serving data
-    await ensureMonitoringStarted();
+    const models = getAvailableModelsList();
     
-    const cachedResponse = getCachedResponse();
-    
-    // Return only cache info without model data for lightweight requests
+    // Return basic info about available models
     return NextResponse.json({
-      cache: cachedResponse.cache,
-      stats: cachedResponse.stats
+      modelCount: models.length,
+      message: 'No cache - fresh testing on every request',
+      lastUpdated: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Error getting cache info:', error);
-    return NextResponse.json({ error: 'Failed to get cache info' }, { status: 500 });
+    console.error('Error getting model info:', error);
+    return NextResponse.json({ error: 'Failed to get model info' }, { status: 500 });
   }
 }

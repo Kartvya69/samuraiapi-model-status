@@ -5,21 +5,13 @@ import { RefreshCw, Wifi, WifiOff, Clock, AlertCircle, BarChart3, Filter, Trendi
 import ModelCard from '@/components/ModelCard';
 import SearchBar from '@/components/SearchBar';
 import ThemeToggle from '@/components/ThemeToggle';
-import { ModelStatus } from '@/lib/modelService';
+import { ModelStatus, ApiResponse } from '@/lib/modelService';
 
 interface ModelStatuses {
   [key: string]: ModelStatus;
 }
 
-interface CachedApiResponse {
-  data: ModelStatuses;
-  stats: {
-    total: number;
-    online: number;
-    offline: number;
-    uptime: string;
-  };
-}
+// Use the imported type instead of defining locally
 
 export default function Home() {
   const [models, setModels] = useState<ModelStatuses>({});
@@ -60,26 +52,34 @@ export default function Home() {
 
   const fetchModels = async () => {
     try {
-      const response = await fetch('/api/models');
-      const cachedData: CachedApiResponse = await response.json();
+      setLoading(true);
+      console.log('🌐 CLIENT: Starting fresh model testing...');
+      const fetchStart = Date.now();
       
-      setModels(cachedData.data);
+      const response = await fetch('/api/models', {
+        cache: 'no-store' // Always get fresh test results
+      });
+      const freshData: ApiResponse = await response.json();
+      
+      const fetchDuration = Date.now() - fetchStart;
+      console.log(`📱 CLIENT: Fresh test complete - ${freshData.stats.total} models in ${fetchDuration}ms`);
+      console.log(`🎯 CLIENT: ${freshData.stats.online} models online (${freshData.stats.uptime}% uptime)`);
+      
+      setModels(freshData.data);
       setLastUpdate(new Date().toLocaleTimeString());
     } catch (error) {
-      console.error('Failed to fetch models:', error);
+      console.error('❌ CLIENT: Failed to test models:', error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    console.log('🎬 CLIENT: Component mounted, starting fresh model testing...');
     fetchModels();
     
-    // Optional: Light polling every 60 seconds just to refresh the UI
-    // The real monitoring happens in the background every 2 minutes
-    const interval = setInterval(fetchModels, 60000);
+    // No auto-refresh since we test fresh every time user requests
     
-    return () => clearInterval(interval);
   }, []);
 
   // Filter and search models

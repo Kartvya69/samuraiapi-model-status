@@ -1,15 +1,22 @@
-import OpenAI from 'openai';
+import axios from 'axios';
 
-const API_BASE_URL = 'https://samuraiapi.in/v1';
-const API_KEY = process.env.OPENAI_API_KEY;
-
-// Initialize OpenAI client with custom base URL for SamuraiAPI
-const openai = new OpenAI({
-  apiKey: API_KEY,
-  baseURL: API_BASE_URL,
-  timeout: 60000, // 60 seconds timeout
+// ULTRA-FAST axios instance - maximum performance optimizations
+const api = axios.create({
+  baseURL: 'https://samuraiapi.in/v1',
+  headers: {
+    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+    'Content-Type': 'application/json',
+    'Connection': 'keep-alive', // Reuse connections
+    'Accept-Encoding': 'gzip, compress', // Compress responses
+  },
+  timeout: 60000, // 60 seconds for reasoning models
+  maxRedirects: 0, // Avoid redirects for speed
+  validateStatus: (status) => status < 500, // Accept all non-server errors
+  maxContentLength: Infinity, // No limit on response size
+  maxBodyLength: Infinity, // No limit on request size
 });
 
+// Types
 export interface ModelStatus {
   model: string;
   status: 'online' | 'offline' | 'error';
@@ -18,16 +25,8 @@ export interface ModelStatus {
   error?: string;
 }
 
-export interface CacheInfo {
-  lastUpdate: string;
-  nextUpdate: string;
-  isStale: boolean;
-  cacheAge: number; // in seconds
-}
-
-export interface CachedResponse {
+export interface ApiResponse {
   data: Record<string, ModelStatus>;
-  cache: CacheInfo;
   stats: {
     total: number;
     online: number;
@@ -36,70 +35,28 @@ export interface CachedResponse {
   };
 }
 
-// Cache management
-let modelStatuses: Record<string, ModelStatus> = {};
+// Global model list
 let availableModels: string[] = [];
-let isMonitoringStarted = false;
-let monitoringInterval: NodeJS.Timeout | null = null;
-let preloadInterval: NodeJS.Timeout | null = null;
-let lastCacheUpdate: Date = new Date();
-let cacheMaxAge = 2 * 60 * 1000; // 2 minutes in milliseconds
-let isPreloading = false;
 
-// Detect if we're in a serverless environment
-const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NETLIFY;
-
-// Cache utility functions
-function getCacheInfo(): CacheInfo {
-  const now = new Date();
-  const cacheAge = Math.floor((now.getTime() - lastCacheUpdate.getTime()) / 1000);
-  const nextUpdate = new Date(lastCacheUpdate.getTime() + cacheMaxAge);
-  const isStale = cacheAge > (cacheMaxAge / 1000);
-
-  return {
-    lastUpdate: lastCacheUpdate.toISOString(),
-    nextUpdate: nextUpdate.toISOString(),
-    isStale,
-    cacheAge
-  };
-}
-
-function updateCache() {
-  lastCacheUpdate = new Date();
-  console.log(`💾 Cache updated at ${lastCacheUpdate.toISOString()}`);
-}
-
-function getStats() {
-  const entries = Object.values(modelStatuses);
-  const total = entries.length;
-  const online = entries.filter(s => s.status === 'online').length;
-  const offline = total - online;
-  const uptime = total > 0 ? ((online / total) * 100).toFixed(1) : '0';
-
-  return { total, online, offline, uptime };
-}
-
-export function getCachedResponse(): CachedResponse {
-  return {
-    data: modelStatuses,
-    cache: getCacheInfo(),
-    stats: getStats()
-  };
-}
-
+// Fetch available models from API
 export async function fetchAvailableModels(): Promise<string[]> {
   try {
-    const modelsList = await openai.models.list();
-
-    if (modelsList && modelsList.data) {
-      availableModels = modelsList.data.map((model: any) => model.id);
+    console.log('🚀 AXIOS: Fetching available models from SamuraiAPI...');
+    const startTime = Date.now();
+    
+    const response = await api.get('/models');
+    const duration = Date.now() - startTime;
+    
+    if (response.data && response.data.data) {
+      availableModels = response.data.data.map((model: any) => model.id);
+      console.log(`⚡ AXIOS: Found ${availableModels.length} models in ${duration}ms`);
       return availableModels;
     } else {
       throw new Error('Invalid response format');
     }
   } catch (error: any) {
-    console.error('Failed to fetch models from API:', error.message || error);
-    // Fallback to a basic set of common models if API call fails
+    console.error('❌ AXIOS: Failed to fetch models:', error.response?.data || error.message);
+    // Fallback to common models
     availableModels = [
       'gpt-3.5-turbo',
       'gpt-4',
@@ -107,11 +64,12 @@ export async function fetchAvailableModels(): Promise<string[]> {
       'claude-3-sonnet',
       'gemini-pro'
     ];
+    console.log('⚠️ Using fallback model list');
     return availableModels;
   }
 }
 
-// Check if a model name suggests it's a chat model
+// Check if a model is a chat model based on name patterns
 function isChatModel(modelName: string): boolean {
   const chatIndicators = [
     'gpt', 'claude', 'gemini', 'llama', 'mistral', 'qwen', 'deepseek',
@@ -139,8 +97,11 @@ function isChatModel(modelName: string): boolean {
   return true;
 }
 
+// Test chat model with axios - ultra fast
 async function testChatModel(modelName: string): Promise<ModelStatus> {
-  const completion = await openai.chat.completions.create({
+  const testStart = Date.now();
+  
+  const response = await api.post('/chat/completions', {
     model: modelName,
     messages: [
       {
@@ -148,26 +109,26 @@ async function testChatModel(modelName: string): Promise<ModelStatus> {
         content: 'Hello, are you working?'
       }
     ],
-    max_tokens: 16, // Increased to 16 to meet minimum requirements for some models
-  }, {
-    timeout: 60000, // 60 seconds timeout
+    max_tokens: 16,
   });
+
+  const testDuration = Date.now() - testStart;
+  const responseText = response.data.choices?.[0]?.message?.content || 'OK';
 
   return {
     model: modelName,
     status: 'online',
     lastChecked: new Date().toISOString(),
-    response: completion.choices?.[0]?.message?.content || 'OK'
+    response: responseText
   };
 }
 
+// Test non-chat model with axios
 async function testNonChatModel(modelName: string): Promise<ModelStatus> {
-  // For non-chat models, we can try a simple embeddings call or just mark as available
-  // Since we can't easily test all model types, we'll mark them as online if they exist
   try {
-    // Try to get model details to confirm it exists
-    const models = await openai.models.list();
-    const modelExists = models.data.some(m => m.id === modelName);
+    // For non-chat models, check if they exist in the models list
+    const response = await api.get('/models');
+    const modelExists = response.data.data.some((m: any) => m.id === modelName);
     
     if (modelExists) {
       return {
@@ -184,30 +145,30 @@ async function testNonChatModel(modelName: string): Promise<ModelStatus> {
   }
 }
 
+// Test individual model with axios - optimized for speed
 export async function testModel(modelName: string): Promise<ModelStatus> {
   try {
     if (isChatModel(modelName)) {
-      const result = await testChatModel(modelName);
-      return result;
+      return await testChatModel(modelName);
     } else {
-      const result = await testNonChatModel(modelName);
-      return result;
+      return await testNonChatModel(modelName);
     }
   } catch (error: any) {
     let errorMessage = error.message || 'Unknown error';
     
-    // Handle OpenAI SDK specific errors
-    if (error.status) {
-      errorMessage = `HTTP ${error.status}: ${error.message}`;
+    // Handle axios HTTP errors
+    if (error.response) {
+      errorMessage = `HTTP ${error.response.status}: ${error.response.data?.error?.message || error.response.statusText}`;
+    } else if (error.code === 'ECONNABORTED') {
+      errorMessage = 'Request timeout';
     }
     
     // If it's a "unknown field 'messages'" error, try testing as non-chat model
     if (errorMessage.includes('unknown field') && isChatModel(modelName)) {
       try {
-        const result = await testNonChatModel(modelName);
-        return result;
+        return await testNonChatModel(modelName);
       } catch (retryError: any) {
-        errorMessage = retryError.message || 'Unknown error on retry';
+        errorMessage = retryError.response?.data?.error?.message || retryError.message || 'Unknown error on retry';
       }
     }
     
@@ -220,152 +181,100 @@ export async function testModel(modelName: string): Promise<ModelStatus> {
   }
 }
 
-export async function checkAllModels(): Promise<Record<string, ModelStatus>> {
+// Generate stats from model statuses
+function getStats(modelStatuses: Record<string, ModelStatus>) {
+  const entries = Object.values(modelStatuses);
+  const total = entries.length;
+  const online = entries.filter(s => s.status === 'online').length;
+  const offline = total - online;
+  const uptime = total > 0 ? ((online / total) * 100).toFixed(1) : '0';
+
+  return { total, online, offline, uptime };
+}
+
+// Test all models with ultra-fast axios parallelization
+export async function testAllModels(): Promise<Record<string, ModelStatus>> {
+  // Fetch models if not already fetched
   if (availableModels.length === 0) {
-    return modelStatuses;
+    console.log('🚀 AXIOS: Fetching model list...');
+    await fetchAvailableModels();
   }
 
-  const promises = availableModels.map(model => testModel(model));
-  const results = await Promise.allSettled(promises);
+  if (availableModels.length === 0) {
+    console.log('⚠️ No models available to test');
+    return {};
+  }
+
+  const totalStartTime = Date.now();
+  console.log(`🚀 AXIOS POWER: Starting ultra-fast parallel testing of ${availableModels.length} models...`);
+
+  // MAXIMUM parallelization - axios can handle much more than OpenAI SDK
+  const BATCH_SIZE = 50; // Even larger batches
+  const MAX_CONCURRENT_BATCHES = 50; // Maximum concurrent batches
   
-  results.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      modelStatuses[availableModels[index]] = result.value;
-    } else {
-      modelStatuses[availableModels[index]] = {
-        model: availableModels[index],
-        status: 'error',
-        lastChecked: new Date().toISOString(),
-        error: (result.reason as Error).message
-      };
-    }
+  const modelStatuses: Record<string, ModelStatus> = {};
+  
+  // Split models into batches
+  const batches: string[][] = [];
+  for (let i = 0; i < availableModels.length; i += BATCH_SIZE) {
+    batches.push(availableModels.slice(i, i + BATCH_SIZE));
+  }
+  
+  console.log(`⚡ AXIOS: Split into ${batches.length} batches of up to ${BATCH_SIZE} models each`);
+  
+  // Process all batches in maximum parallel (axios can handle more concurrent requests)
+  const allBatchPromises = batches.map(async (batch, batchIndex) => {
+    const batchStart = Date.now();
+    console.log(`🔥 AXIOS Batch ${batchIndex + 1}: Testing ${batch.length} models`);
+    
+    const promises = batch.map(model => testModel(model));
+    const results = await Promise.allSettled(promises);
+    
+    let successful = 0;
+    let failed = 0;
+    
+    results.forEach((result, index) => {
+      const modelName = batch[index];
+      if (result.status === 'fulfilled') {
+        modelStatuses[modelName] = result.value;
+        if (result.value.status === 'online') successful++;
+        else failed++;
+      } else {
+        modelStatuses[modelName] = {
+          model: modelName,
+          status: 'error',
+          lastChecked: new Date().toISOString(),
+          error: (result.reason as Error).message
+        };
+        failed++;
+      }
+    });
+    
+    const batchDuration = Date.now() - batchStart;
+    console.log(`✅ AXIOS Batch ${batchIndex + 1}: ${batchDuration}ms - ${successful} online, ${failed} failed`);
   });
   
-  // Update cache timestamp
-  updateCache();
+  // Execute ALL batches simultaneously for maximum speed
+  console.log(`⚡ AXIOS: Executing ALL ${batches.length} batches simultaneously...`);
+  await Promise.all(allBatchPromises);
+  
+  const totalDuration = Date.now() - totalStartTime;
+  const stats = getStats(modelStatuses);
+  console.log(`🏁 AXIOS COMPLETE: ${availableModels.length} models tested in ${totalDuration}ms (${(totalDuration/1000).toFixed(1)}s)`);
+  console.log(`📊 AXIOS RESULTS: ${stats.online} online, ${stats.offline} offline, ${stats.uptime}% uptime`);
   
   return modelStatuses;
 }
 
-export function getModelStatuses(): Record<string, ModelStatus> {
-  return modelStatuses;
+// Generate fresh API response
+export function getFreshResponse(modelStatuses: Record<string, ModelStatus>): ApiResponse {
+  return {
+    data: modelStatuses,
+    stats: getStats(modelStatuses)
+  };
 }
 
-export function getAvailableModels(): string[] {
+// Get available models list
+export function getAvailableModelsList(): string[] {
   return availableModels;
-}
-
-// Preload models in background (starts at 60s mark)
-async function preloadModels(): Promise<void> {
-  if (isPreloading) return;
-  
-  isPreloading = true;
-  try {
-    await checkAllModels();
-  } catch (error) {
-    console.error('❌ Error during model preloading:', error);
-  } finally {
-    isPreloading = false;
-  }
-}
-
-// Start background monitoring immediately when the service loads
-export async function startBackgroundMonitoring(): Promise<void> {
-  if (isMonitoringStarted) {
-    return;
-  }
-  
-  // Skip background monitoring in serverless environments
-  if (isServerless) {
-    console.log('Serverless environment detected, skipping background monitoring');
-    return;
-  }
-  
-  isMonitoringStarted = true;
-  
-  try {
-    // Initial setup and first check
-    await fetchAvailableModels();
-    await checkAllModels();
-    
-    // Set up main interval for every 2 minutes (120,000 ms)
-    monitoringInterval = setInterval(async () => {
-      try {
-        await checkAllModels();
-      } catch (error) {
-        console.error('❌ Error during scheduled model check:', error);
-      }
-    }, 2 * 60 * 1000);
-    
-    // Set up pre-emptive loading at 60s mark
-    preloadInterval = setInterval(async () => {
-      try {
-        await preloadModels();
-      } catch (error) {
-        console.error('❌ Error during model preloading:', error);
-      }
-    }, 2 * 60 * 1000);
-    
-    // Start the preload cycle 60s after the main cycle
-    setTimeout(() => {
-      preloadModels();
-    }, 60 * 1000);
-    
-  } catch (error) {
-    console.error('❌ Failed to start background monitoring:', error);
-    isMonitoringStarted = false;
-    throw error;
-  }
-}
-
-// For serverless environments (like Vercel), we need to check if cache is stale and refresh on-demand
-export async function ensureMonitoringStarted(): Promise<void> {
-  // On serverless platforms, background intervals don't work
-  // Instead, we check on each API call if cache needs refreshing
-  const now = new Date();
-  const cacheAge = Math.floor((now.getTime() - lastCacheUpdate.getTime()) / 1000);
-  const maxAge = cacheMaxAge / 1000; // Convert to seconds
-  
-  // If cache is empty or stale (older than 2 minutes), refresh it
-  if (Object.keys(modelStatuses).length === 0 || cacheAge > maxAge) {
-    console.log(`🔄 Cache is ${Object.keys(modelStatuses).length === 0 ? 'empty' : 'stale'}, refreshing...`);
-    
-    // Fetch models if we don't have any
-    if (availableModels.length === 0) {
-      await fetchAvailableModels();
-    }
-    
-    // Check all models
-    await checkAllModels();
-  }
-  
-  // In non-serverless environments, try to start background monitoring
-  if (!isServerless && !isMonitoringStarted) {
-    try {
-      await startBackgroundMonitoring();
-    } catch (error) {
-      console.log('Background monitoring failed to start');
-    }
-  }
-}
-
-export function stopBackgroundMonitoring(): void {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
-    monitoringInterval = null;
-  }
-  if (preloadInterval) {
-    clearInterval(preloadInterval);
-    preloadInterval = null;
-  }
-  isMonitoringStarted = false;
-}
-
-export function isMonitoringActive(): boolean {
-  return isMonitoringStarted && monitoringInterval !== null;
-}
-
-// Legacy compatibility - just ensure monitoring is started
-export async function initializeMonitoring(): Promise<void> {
-  await startBackgroundMonitoring();
 }

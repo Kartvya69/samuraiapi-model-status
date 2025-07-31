@@ -1,23 +1,22 @@
 import { NextResponse } from 'next/server';
-import { fetchAvailableModels, getAvailableModels, checkAllModels, ensureMonitoringStarted } from '@/lib/modelService';
+import { testAllModels, getFreshResponse } from '@/lib/modelService';
 
 export async function POST() {
   try {
-    // Ensure monitoring is started
-    await ensureMonitoringStarted();
+    console.log('🔄 REFRESH API: Manual refresh requested');
     
-    await fetchAvailableModels();
-    await checkAllModels();
-    const models = getAvailableModels();
+    // Test all models fresh
+    const modelStatuses = await testAllModels();
+    const response = getFreshResponse(modelStatuses);
     
     return NextResponse.json({
       success: true,
-      models,
-      count: models.length,
-      message: 'Model list refreshed successfully'
+      data: response.data,
+      stats: response.stats,
+      message: 'Fresh model testing completed successfully'
     });
   } catch (error: any) {
-    console.error('Error refreshing models:', error);
+    console.error('❌ REFRESH API ERROR:', error);
     return NextResponse.json({
       success: false,
       error: error.message
